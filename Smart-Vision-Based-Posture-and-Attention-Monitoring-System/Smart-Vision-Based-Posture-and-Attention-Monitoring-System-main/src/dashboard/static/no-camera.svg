@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" style="background:#06090f">
+  <rect width="640" height="360" fill="#06090f"/>
+  <g transform="translate(320,150)">
+    <path d="M-48 0 C-48 0 -20 -28 0 -28 C20 -28 48 0 48 0 C48 0 20 28 0 28 C-20 28 -48 0 -48 0 Z"
+          fill="none" stroke="#2d4060" stroke-width="3"/>
+    <circle cx="0" cy="0" r="12" fill="#2d4060"/>
+    <line x1="-40" y1="-40" x2="40" y2="40" stroke="#ff3d5a" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="320" y="220" text-anchor="middle" font-family="monospace" font-size="13" fill="#2d4060">Camera unavailable · check CAMERA_INDEX in .env</text>
+  <text x="320" y="242" text-anchor="middle" font-family="monospace" font-size="11" fill="#1a2540">MediaPipe is running · waiting for camera feed…</text>
+</svg>

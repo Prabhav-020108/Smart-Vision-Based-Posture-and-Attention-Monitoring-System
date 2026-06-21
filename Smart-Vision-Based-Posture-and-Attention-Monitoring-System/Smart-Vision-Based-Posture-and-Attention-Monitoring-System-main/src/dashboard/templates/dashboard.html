@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PostureGuard — Smart Monitoring</title>
+
+  <!-- Fonts: Space Grotesk for headings, JetBrains Mono for data values -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+
+  <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════ NAVBAR ══════════════════ -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <svg class="nav-eye" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M2 12C2 12 8 2 20 2C32 2 38 12 38 12C38 12 32 22 20 22C8 22 2 12 2 12Z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="20" cy="12" r="5" fill="currentColor"/>
+        <circle cx="22" cy="10" r="1.5" fill="rgba(0,0,0,0.4)"/>
+      </svg>
+      <span class="nav-title">PostureGuard</span>
+    </div>
+
+    <div class="nav-center" id="alertToastNav"></div>
+
+    <div class="nav-right">
+      <div class="status-pill" id="workerPill">
+        <span class="status-dot" id="workerDot"></span>
+        <span id="workerLabel">Initialising</span>
+      </div>
+      <div class="status-pill esp32-pill" id="esp32Pill">
+        <svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="currentColor"/></svg>
+        <span id="esp32Label">ESP32</span>
+      </div>
+      <div class="session-clock" id="sessionClock">00:00</div>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════ MAIN CONTENT ══════════════ -->
+  <main class="main">
+
+    <!-- ── Hero row: camera feed + live sidebar ───────────────────────────── -->
+    <div class="hero-row">
+
+      <!-- Camera card -->
+      <section class="card camera-card" aria-label="Live camera feed">
+        <div class="card-header">
+          <span class="card-eyebrow">Live Camera Feed</span>
+          <span class="cam-dot" id="camDot" title="Camera status"></span>
+        </div>
+        <div class="camera-wrapper">
+          <img
+            id="cameraFeed"
+            class="camera-feed"
+            src="/video_feed"
+            alt="Live posture monitoring feed with MediaPipe overlay"
+            onerror="this.src='/static/no-camera.svg'; this.onerror=null;"
+          >
+          <div class="scan-line" aria-hidden="true"></div>
+          <div class="camera-overlay-info" id="overlayInfo" style="display:none">
+            <span id="overlayPosture">--</span>
+            <span id="overlayAttention">--</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Live stats sidebar -->
+      <aside class="live-sidebar">
+
+        <!-- Posture score ring -->
+        <div class="card ring-card" aria-label="Posture score">
+          <span class="card-eyebrow">Posture Score</span>
+          <div class="ring-wrap">
+            <svg class="ring-svg" viewBox="0 0 120 120" aria-hidden="true">
+              <!-- Track -->
+              <circle cx="60" cy="60" r="48"
+                      fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="10"/>
+              <!-- Glow filter -->
+              <defs>
+                <filter id="arc-glow">
+                  <feGaussianBlur stdDeviation="3" result="blur"/>
+                  <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              <!-- Score arc -->
+              <circle id="scoreArc"
+                      cx="60" cy="60" r="48"
+                      fill="none"
+                      stroke="var(--green)"
+                      stroke-width="10"
+                      stroke-linecap="round"
+                      stroke-dasharray="301.6"
+                      stroke-dashoffset="301.6"
+                      transform="rotate(-90 60 60)"
+                      filter="url(#arc-glow)"/>
+            </svg>
+            <div class="ring-center">
+              <span class="ring-value" id="postureScore">--</span>
+              <span class="ring-sub">/100</span>
+            </div>
+          </div>
+          <div class="posture-badge" id="postureBadge" data-state="">--</div>
+        </div>
+
+        <!-- Attention state -->
+        <div class="card attention-card" aria-label="Attention state">
+          <span class="card-eyebrow">Attention</span>
+          <div class="attention-row">
+            <div class="attention-dot" id="attentionDot" data-state=""></div>
+            <span class="attention-value" id="attentionValue">--</span>
+          </div>
+        </div>
+
+        <!-- Focus rate -->
+        <div class="card focus-rate-card" aria-label="Focus rate">
+          <span class="card-eyebrow">Focus Rate</span>
+          <div class="focus-pct" id="focusPct">--</div>
+          <div class="focus-track" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="focus-fill" id="focusFill"></div>
+          </div>
+        </div>
+
+        <!-- Session picker -->
+        <div class="card session-card" aria-label="Session selector">
+          <span class="card-eyebrow">Session</span>
+          <select id="sessionSelect" class="session-select" aria-label="Select session to view">
+            <option value="live">▶ Live Session</option>
+          </select>
+        </div>
+
+      </aside>
+    </div>
+
+    <!-- ── Metric strip ────────────────────────────────────────────────────── -->
+    <div class="metric-strip" role="region" aria-label="Session metrics">
+
+      <div class="card metric-card">
+        <span class="card-eyebrow">Focused Time</span>
+        <span class="metric-val metric-green" id="focusedTime">0m 0s</span>
+      </div>
+
+      <div class="card metric-card">
+        <span class="card-eyebrow">Distracted Time</span>
+        <span class="metric-val metric-red" id="distractedTime">0m 0s</span>
+      </div>
+
+      <div class="card metric-card">
+        <span class="card-eyebrow">Continuous Distraction</span>
+        <span class="metric-val" id="continuousDistractionTime">0s</span>
+      </div>
+
+      <div class="card metric-card alert-metric" id="alertMetricCard">
+        <span class="card-eyebrow">Alerts Fired</span>
+        <span class="metric-val" id="alertCount">0</span>
+      </div>
+
+    </div>
+
+    <!-- ── Charts row: posture + focus ────────────────────────────────────── -->
+    <div class="charts-row">
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Posture Score Over Time</span>
+          <span class="legend-dot cyan"></span>
+        </div>
+        <div class="chart-box">
+          <canvas id="postureChart" aria-label="Posture score line chart"></canvas>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Focus Rate Over Time</span>
+          <span class="legend-dot green"></span>
+        </div>
+        <div class="chart-box">
+          <canvas id="focusChart" aria-label="Focus rate line chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Time split bar chart ────────────────────────────────────────────── -->
+    <div class="card wide-card">
+      <div class="card-header">
+        <span class="card-eyebrow">Session Time Breakdown (minutes)</span>
+      </div>
+      <div class="chart-box chart-box--wide">
+        <canvas id="timeSplitChart" aria-label="Focused versus distracted time bar chart"></canvas>
+      </div>
+    </div>
+
+    <!-- ── Alert history ──────────────────────────────────────────────────── -->
+    <div class="card wide-card alerts-card">
+      <div class="card-header">
+        <span class="card-eyebrow">Alert History</span>
+        <span class="alert-badge" id="alertBadge">0</span>
+      </div>
+      <ul class="alert-list" id="alertList" aria-live="polite">
+        <li class="alert-empty">No alerts recorded this session.</li>
+      </ul>
+    </div>
+
+    <!-- ── Session history ────────────────────────────────────────────────── -->
+    <div class="card wide-card history-card">
+      <div class="card-header">
+        <span class="card-eyebrow">Past Sessions</span>
+        <button class="export-btn" id="exportBtn" disabled>Export CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table class="history-table" aria-label="Session history">
+          <thead>
+            <tr>
+              <th>Session ID</th>
+              <th>Started</th>
+              <th>Ended</th>
+              <th>Focused</th>
+              <th>Distracted</th>
+              <th>Focus %</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="7" class="table-empty">Loading sessions…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ══════════════════════════════════════════ ALERT TOAST ════════════════ -->
+  <div class="toast-container" id="toastContainer" aria-live="assertive"></div>
+
+  <script src="{{ url_for('static', path='/dashboard.js') }}"></script>
+</body>
+</html>

@@ -48,7 +48,7 @@ class VisionService:
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose()
         self.mp_draw = mp.solutions.drawing_utils
-        self.cap = cv2.VideoCapture(camera_index)
+        self.cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
         self.alert_service = alert_service or AlertService()
 
         self.focused_time = 0

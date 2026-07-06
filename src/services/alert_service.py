@@ -28,15 +28,48 @@ class AlertService:
     event.
     """
 
+    # Alerts severe enough to also justify a Telegram push, if configured.
+    SEVERE_ALERTS = {CRITICAL_DISTRACTION, FIX_YOUR_POSTURE}
+
     def __init__(
         self,
         *,
         cooldown_seconds: float = DEFAULT_ALERT_COOLDOWN_SECONDS,
         serial_sender: Callable[[str], bool | None] = send_alert,
+        notifier: Callable[[str], None] | None = None,
     ):
         self.cooldown_seconds = cooldown_seconds
         self.serial_sender = serial_sender
+        self.notifier = notifier
         self._last_emitted_at: float | None = None
+
+    def emit(self, alert_message: str, *, now: float | None = None) -> bool:
+        """Send ``alert_message`` to the ESP32 if the cooldown allows it, and
+        push it to the configured notifier (e.g. Telegram) for severe alerts.
+
+        This is the cooldown-aware counterpart to the vision pipeline's pure
+        ``evaluate_alert`` — the worker loop calls this once per frame with
+        whatever ``evaluate_alert`` returned, and this method decides
+        whether enough time has actually passed to act on it again.
+        Returns True if the alert was sent.
+        """
+
+        if not self.should_emit_alert(alert_message, now=now):
+            return False
+
+        try:
+            self.serial_sender(alert_message)
+        except Exception as exc:
+            print(f"Alert serial send skipped: {exc}")
+
+        if self.notifier is not None and alert_message in self.SEVERE_ALERTS:
+            try:
+                self.notifier(alert_message)
+            except Exception as exc:
+                print(f"Alert notifier skipped: {exc}")
+
+        self._last_emitted_at = now if now is not None else time.time()
+        return True
 
     def evaluate_alert(
         self,

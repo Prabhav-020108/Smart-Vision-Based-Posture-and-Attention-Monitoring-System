@@ -41,6 +41,17 @@ const dom = {
   exportBtn:       $('exportBtn'),
   historyBody:     $('historyBody'),
   toastContainer:  $('toastContainer'),
+  calibrationBanner:  $('calibrationBanner'),
+  calibrationSeconds: $('calibrationSeconds'),
+  breakdownList:      $('breakdownList'),
+  hrValue:            $('hrValue'),
+  hrQualityDot:       $('hrQualityDot'),
+  luxValue:           $('luxValue'),
+  sensorNote:         $('sensorNote'),
+  streakValue:        $('streakValue'),
+  streakBadge:        $('streakBadge'),
+  nudgeBanner:        $('nudgeBanner'),
+  nudgeMessage:       $('nudgeMessage'),
 };
 
 /* ── App state ───────────────────────────────────────────────────────────── */
@@ -125,11 +136,14 @@ function setScoreRing(score) {
 
 /* ── Metric cards ────────────────────────────────────────────────────────── */
 function applyLiveMetrics(m) {
+  applyCalibrationState(m);
   setScoreRing(m.posture_score);
 
   const ps = m.posture_state || '';
   dom.postureBadge.textContent   = ps || '--';
   dom.postureBadge.dataset.state = ps;
+
+  updateBreakdownList(m.posture_breakdown);
 
   const as = m.attention_state || '';
   dom.attentionDot.dataset.state = as;
@@ -145,11 +159,90 @@ function applyLiveMetrics(m) {
   dom.distractedTime.textContent = fmtDuration(m.distracted_time);
   dom.contDistr.textContent      = fmtSecs(m.continuous_distraction_time);
 
+  if (m.sensors) applySensorReadings(m.sensors);
+  applyProactiveNudge(m.proactive_nudge);
+
   // Alert count from latest metrics alert_message counts are from history
   if (m.alert_message && m.alert_message !== lastAlertMessage) {
     lastAlertMessage = m.alert_message;
     showToast(m.alert_message);
   }
+}
+
+/* ── Calibration banner ──────────────────────────────────────────────────── */
+function applyCalibrationState(m) {
+  if (m.calibrating) {
+    dom.calibrationBanner.style.display = 'flex';
+    dom.calibrationSeconds.textContent = Math.max(0, Math.ceil(+m.calibration_seconds_remaining || 0));
+  } else {
+    dom.calibrationBanner.style.display = 'none';
+  }
+}
+
+/* ── "Why this score" explainability breakdown ──────────────────────────── */
+const BREAKDOWN_LABELS = {
+  lateral_lean:   'Lateral lean',
+  forward_hunch:  'Forward hunch',
+  shoulder_tilt:  'Shoulder tilt',
+};
+
+function updateBreakdownList(breakdown) {
+  if (!breakdown) {
+    dom.breakdownList.innerHTML = '<li class="breakdown-empty">Score breakdown appears once calibration finishes.</li>';
+    return;
+  }
+  dom.breakdownList.innerHTML = Object.entries(breakdown).map(([key, val]) => {
+    const label = BREAKDOWN_LABELS[key] || key;
+    const n = +val || 0;
+    const cls = n === 0 ? 'neutral' : 'penalty';
+    return `<li class="breakdown-item ${cls}"><span>${label}</span><span>${n === 0 ? '0' : n.toFixed(1)}</span></li>`;
+  }).join('');
+}
+
+/* ── Sensor readings (HRV proxy + ambient light) ─────────────────────────── */
+function applySensorReadings(sensors) {
+  const hr = sensors.hr;
+  if (hr && sensors.hr_reliable) {
+    dom.hrValue.textContent = `${Math.round(hr.bpm)} bpm`;
+    dom.hrQualityDot.className = 'sensor-quality-dot good';
+    dom.sensorNote.textContent = 'Reading looks stable.';
+  } else if (hr) {
+    dom.hrValue.textContent = `${Math.round(hr.bpm)} bpm`;
+    dom.hrQualityDot.className = 'sensor-quality-dot weak';
+    dom.sensorNote.textContent = 'Signal quality is low right now — hold still for a cleaner reading.';
+  } else {
+    dom.hrValue.textContent = '--';
+    dom.hrQualityDot.className = 'sensor-quality-dot none';
+    dom.sensorNote.textContent = 'Rest a finger on the MAX30102 for an HRV reading.';
+  }
+
+  const lux = sensors.lux;
+  dom.luxValue.textContent = lux ? `${lux.brightness_score.toFixed(0)}%` : '--';
+}
+
+/* ── Proactive focus-decay nudge (distinct from reactive alert toasts) ──── */
+let lastNudgeMessage = '';
+function applyProactiveNudge(nudge) {
+  if (!nudge) return;
+  if (nudge.message === lastNudgeMessage) return; // avoid re-flashing the identical message
+  lastNudgeMessage = nudge.message;
+
+  dom.nudgeMessage.textContent = nudge.message;
+  dom.nudgeBanner.style.display = 'flex';
+  clearTimeout(applyProactiveNudge._t);
+  applyProactiveNudge._t = setTimeout(() => { dom.nudgeBanner.style.display = 'none'; }, 15000);
+}
+
+/* ── MJPEG camera feed auto-reconnect ────────────────────────────────────── */
+let _feedReconnectTimer = null;
+
+function reconnectCameraFeed() {
+  const img = document.getElementById('cameraFeed');
+  if (!img) return;
+  // Force the browser to re-request the MJPEG stream by updating the src
+  // with a cache-busting query parameter.
+  const base = '/video_feed';
+  img.src = `${base}?t=${Date.now()}`;
 }
 
 /* ── Status indicators ───────────────────────────────────────────────────── */
@@ -160,6 +253,14 @@ function applyStatus(s) {
     dom.workerDot.className  = 'status-dot pulse';
     dom.workerLabel.textContent = 'LIVE';
     dom.camDot.className = 'cam-dot live';
+
+    // Auto-reconnect: if the camera is OK on the server but the <img> has
+    // no pixel data (naturalHeight === 0), the MJPEG stream was interrupted
+    // (e.g. by a server restart via --reload).  Re-set the src to reconnect.
+    const feedImg = document.getElementById('cameraFeed');
+    if (feedImg && feedImg.naturalHeight === 0) {
+      reconnectCameraFeed();
+    }
   } else if (s.worker_running && !s.camera_ok) {
     dom.workerPill.className = 'status-pill offline';
     dom.workerDot.className  = 'status-dot';
@@ -267,10 +368,109 @@ function makeBarChart(canvasId) {
   });
 }
 
+function makeDonutChart(canvasId, labels, colors) {
+  const ctx = document.getElementById(canvasId);
+  return new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data: labels.map(() => 0), backgroundColor: colors, borderWidth: 0 }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '68%',
+      animation: { duration: 300 },
+      plugins: {
+        legend: {
+          display: true, position: 'bottom',
+          labels: { color: '#6b83a8', font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 10, padding: 12 },
+        },
+        tooltip: CHART_DEFAULTS.plugins.tooltip,
+      },
+    },
+  });
+}
+
+function makeRadarChart(canvasId) {
+  const ctx = document.getElementById(canvasId);
+  return new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: ['Posture', 'Attention', 'Focus rate', 'Alert control'],
+      datasets: [{
+        data: [0, 0, 0, 0],
+        backgroundColor: 'rgba(0,200,232,0.15)',
+        borderColor: '#00c8e8',
+        pointBackgroundColor: '#00c8e8',
+        borderWidth: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: { legend: { display: false }, tooltip: CHART_DEFAULTS.plugins.tooltip },
+      scales: {
+        r: {
+          min: 0, max: 100,
+          ticks: { display: false, stepSize: 25 },
+          grid: { color: 'rgba(80,120,200,0.12)' },
+          angleLines: { color: 'rgba(80,120,200,0.12)' },
+          pointLabels: { color: '#6b83a8', font: { family: 'JetBrains Mono', size: 10 } },
+        },
+      },
+    },
+  });
+}
+
+function makeSensorChart(canvasId) {
+  const ctx = document.getElementById(canvasId);
+  return new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        {
+          label: 'HRV proxy (bpm)', data: [],
+          borderColor: '#ffa800', backgroundColor: 'rgba(255,168,0,0.08)',
+          borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'yHr', spanGaps: true,
+        },
+        {
+          label: 'Ambient light (%)', data: [],
+          borderColor: '#a78bfa', backgroundColor: 'rgba(167,139,250,0.08)',
+          borderWidth: 2, pointRadius: 0, tension: 0.3, yAxisID: 'yLux', spanGaps: true,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: {
+        legend: {
+          display: true, position: 'bottom',
+          labels: { color: '#6b83a8', font: { family: 'JetBrains Mono', size: 10 }, boxWidth: 10 },
+        },
+        tooltip: CHART_DEFAULTS.plugins.tooltip,
+      },
+      scales: {
+        x: CHART_DEFAULTS.scales.x,
+        yHr:  { position: 'left',  min: 40, max: 180, ticks: { color: '#ffa800', font: { family: 'JetBrains Mono', size: 9 } }, grid: { display: false } },
+        yLux: { position: 'right', min: 0,  max: 100,  ticks: { color: '#a78bfa', font: { family: 'JetBrains Mono', size: 9 } }, grid: { display: false, drawOnChartArea: false } },
+      },
+    },
+  });
+}
+
 function initCharts() {
-  charts.posture   = makeLineChart('postureChart', 'Posture Score', '#00c8e8');
-  charts.focus     = makeLineChart('focusChart',   'Focus Rate %',  '#00e896');
-  charts.timeSplit = makeBarChart('timeSplitChart');
+  charts.posture      = makeLineChart('postureChart', 'Posture Score', '#00c8e8');
+  charts.focus        = makeLineChart('focusChart',   'Focus Rate %',  '#00e896');
+  charts.timeSplit    = makeBarChart('timeSplitChart');
+  charts.postureDonut = makeDonutChart('postureDonutChart', ['Good', 'Moderate', 'Bad'], ['#00e896', '#ffa800', '#ff3d5a']);
+  charts.focusDonut   = makeDonutChart('focusDonutChart', ['Focused', 'Distracted'], ['#00e896', '#ff3d5a']);
+  charts.radar        = makeRadarChart('radarChart');
+  charts.sensor       = makeSensorChart('sensorChart');
 }
 
 function updateCharts(samples) {
@@ -295,6 +495,41 @@ function updateCharts(samples) {
     ];
     charts.timeSplit.update('none');
   }
+
+  updateDonuts(samples);
+  updateRadar(samples);
+}
+
+/* ── Donut charts: state distribution across the visible window ─────────── */
+function updateDonuts(samples) {
+  const counts = { GOOD: 0, MODERATE: 0, BAD: 0 };
+  for (const s of samples) {
+    if (s.posture_state && counts[s.posture_state] != null) counts[s.posture_state]++;
+  }
+  charts.postureDonut.data.datasets[0].data = [counts.GOOD, counts.MODERATE, counts.BAD];
+  charts.postureDonut.update('none');
+
+  const latest = samples[samples.length - 1];
+  charts.focusDonut.data.datasets[0].data = [
+    +(latest.focused_time || 0),
+    +(latest.distracted_time || 0),
+  ];
+  charts.focusDonut.update('none');
+}
+
+/* ── Radar: four-axis session snapshot ───────────────────────────────────── */
+function updateRadar(samples) {
+  const n = samples.length;
+  const goodPct     = 100 * samples.filter(s => s.posture_state === 'GOOD').length / n;
+  const focusedPct  = 100 * samples.filter(s => s.attention_state === 'FOCUSED').length / n;
+  const alertCount  = samples.filter(s => s.alert_message).length;
+  const alertControl = Math.max(0, 100 - (alertCount / n) * 400); // a handful of alerts visibly dents this
+  const focusRate   = +(samples[n - 1].focus_percentage || 0);
+
+  charts.radar.data.datasets[0].data = [
+    Math.round(goodPct), Math.round(focusedPct), Math.round(focusRate), Math.round(alertControl),
+  ];
+  charts.radar.update('none');
 }
 
 /* ── Alert list ──────────────────────────────────────────────────────────── */
@@ -440,6 +675,42 @@ async function pollHistory() {
   }
 }
 
+/* ── Poll: sensor history for the dual-axis chart (3 s, piggybacks on history cadence) ── */
+async function pollSensorHistory() {
+  try {
+    const data = await fetchJson('/api/sensors/history?limit=120');
+    const hr = data.hr || [];
+    const lux = data.lux || [];
+    if (!hr.length && !lux.length) return;
+
+    const longer = hr.length >= lux.length ? hr : lux;
+    charts.sensor.data.labels = longer.map(r => fmtShortTs(r.timestamp * 1000));
+    charts.sensor.data.datasets[0].data = hr.map(r => (r.plausible ? r.bpm : null));
+    charts.sensor.data.datasets[1].data = lux.map(r => r.brightness_score);
+    charts.sensor.update('none');
+  } catch (e) {
+    console.warn('[sensor history poll]', e.message);
+  }
+}
+
+/* ── Poll: gamification streak summary (12 s, piggybacks on session cadence) ── */
+async function pollGamification() {
+  try {
+    const g = await fetchJson('/api/gamification/summary');
+    dom.streakValue.textContent = g.current_streak_days;
+    if (g.earned_badge) {
+      dom.streakBadge.textContent = `${g.earned_badge.name} · ${g.earned_badge.description}`;
+    } else if (g.next_badge) {
+      const d = g.next_badge.days_to_go;
+      dom.streakBadge.textContent = `${g.next_badge.name} in ${d} day${d === 1 ? '' : 's'}`;
+    } else {
+      dom.streakBadge.textContent = '';
+    }
+  } catch (e) {
+    console.warn('[gamification poll]', e.message);
+  }
+}
+
 /* ── Session select handler ──────────────────────────────────────────────── */
 dom.sessionSelect.addEventListener('change', e => {
   viewMode = e.target.value;  // 'live' or a session_id
@@ -462,9 +733,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   await pollLive();
   await pollHistory();
   await loadSessions();
+  await pollSensorHistory();
+  await pollGamification();
 
   // Recurring intervals
-  setInterval(pollLive,    LIVE_POLL_MS);
-  setInterval(pollHistory, HISTORY_POLL_MS);
-  setInterval(loadSessions, SESSION_POLL_MS);
+  setInterval(pollLive,           LIVE_POLL_MS);
+  setInterval(pollHistory,        HISTORY_POLL_MS);
+  setInterval(pollSensorHistory,  HISTORY_POLL_MS);
+  setInterval(loadSessions,       SESSION_POLL_MS);
+  setInterval(pollGamification,   SESSION_POLL_MS);
 });

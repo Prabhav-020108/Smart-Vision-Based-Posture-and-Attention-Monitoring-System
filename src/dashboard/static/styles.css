@@ -486,6 +486,147 @@ ul { list-style: none; }
 }
 .legend-dot.cyan  { background: var(--cyan); }
 .legend-dot.green { background: var(--green); }
+.legend-dot.amber { background: var(--amber); }
+
+/* ── Calibration banner (overlay on the camera feed) ─────────────────────── */
+.calibration-banner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  background: rgba(6, 9, 15, 0.72);
+  backdrop-filter: blur(2px);
+  color: var(--text-hi);
+  font-family: var(--font-data);
+  font-size: 0.95rem;
+  z-index: 5;
+}
+
+.calibration-spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  border: 2px solid rgba(0, 200, 232, 0.25);
+  border-top-color: var(--cyan);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Score explainability breakdown ──────────────────────────────────────── */
+.breakdown-list {
+  list-style: none;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.breakdown-item {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-data);
+  font-size: 0.72rem;
+  color: var(--text-mid);
+  padding: 0.15rem 0.1rem;
+}
+
+.breakdown-item.penalty span:last-child { color: var(--red); }
+.breakdown-item.neutral span:last-child { color: var(--green); }
+
+.breakdown-empty {
+  font-size: 0.7rem;
+  color: var(--text-low);
+  text-align: center;
+  list-style: none;
+}
+
+/* ── Sensors card ─────────────────────────────────────────────────────────── */
+.sensors-card { padding: 1rem 1.25rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+.sensor-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+}
+
+.sensor-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-mid);
+}
+
+.sensor-value {
+  font-family: var(--font-data);
+  font-weight: 600;
+  color: var(--text-hi);
+}
+
+.sensor-quality-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-low);
+  flex-shrink: 0;
+}
+.sensor-quality-dot.good { background: var(--green); animation: dot-pulse 1.4s infinite; }
+.sensor-quality-dot.weak { background: var(--amber); }
+.sensor-quality-dot.none { background: var(--text-low); }
+
+.sensor-note {
+  font-size: 0.68rem;
+  color: var(--text-low);
+  line-height: 1.4;
+  margin-top: 0.15rem;
+}
+
+/* ── Streak / gamification card ──────────────────────────────────────────── */
+.streak-card { padding: 1rem 1.25rem; }
+
+.streak-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.streak-flame { font-size: 1.1rem; filter: grayscale(0.15); }
+.streak-value { font-family: var(--font-data); font-size: 1.6rem; font-weight: 700; color: var(--amber); }
+.streak-unit  { font-size: 0.78rem; color: var(--text-mid); }
+
+.streak-badge {
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--text-low);
+}
+
+/* ── Proactive focus-decay nudge banner ──────────────────────────────────── */
+.nudge-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1.1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 168, 0, 0.25);
+  background: var(--amber-dim);
+  color: var(--text-hi);
+  font-size: 0.85rem;
+  animation: slide-in 0.35s ease;
+}
+
+.nudge-icon { color: var(--amber); font-size: 1rem; }
+
+/* ── Donut charts ─────────────────────────────────────────────────────────── */
+.chart-box--donut {
+  height: 220px;
+  max-width: 260px;
+  margin: 0 auto;
+  position: relative;
+}
 
 /* ── Wide card ───────────────────────────────────────────────────────────── */
 .wide-card {}

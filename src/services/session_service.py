@@ -139,6 +139,59 @@ class SessionService:
             )
             return [self._sample_to_dict(sample) for sample in reversed(samples)]
 
+    def save_sensor_reading(
+        self,
+        session_id: str,
+        *,
+        sensor_type: str,
+        value: float | None,
+        unit: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timestamp: datetime | None = None,
+    ) -> models.SensorReading:
+        """Persist one flexible sensor reading (HRV-proxy BPM, ambient light, ...)."""
+
+        with self._session_scope() as db:
+            return crud.create_sensor_reading(
+                db,
+                session_id=session_id,
+                sensor_type=sensor_type,
+                timestamp=timestamp,
+                value=value,
+                unit=unit,
+                metadata_json=metadata,
+            )
+
+    def get_recent_sensor_readings(
+        self,
+        session_id: str,
+        *,
+        sensor_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Retrieve recent sensor readings for the dashboard's correlation charts."""
+
+        limit = max(1, min(limit, 2000))
+        with self._session_scope() as db:
+            stmt = select(models.SensorReading).where(
+                models.SensorReading.session_id == session_id
+            )
+            if sensor_type:
+                stmt = stmt.where(models.SensorReading.sensor_type == sensor_type)
+            stmt = stmt.order_by(desc(models.SensorReading.timestamp)).limit(limit)
+            readings = list(db.scalars(stmt))
+            return [
+                {
+                    "id": r.id,
+                    "timestamp": r.timestamp,
+                    "sensor_type": r.sensor_type,
+                    "value": r.value,
+                    "unit": r.unit,
+                    "metadata": r.metadata_json,
+                }
+                for r in reversed(readings)
+            ]
+
     def get_session_history(self, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """Retrieve recent monitoring sessions for history views."""
 

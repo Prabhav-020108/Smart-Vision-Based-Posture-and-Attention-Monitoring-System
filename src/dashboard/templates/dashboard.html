@@ -68,6 +68,10 @@
             <span id="overlayPosture">--</span>
             <span id="overlayAttention">--</span>
           </div>
+          <div class="calibration-banner" id="calibrationBanner" style="display:none">
+            <div class="calibration-spinner" aria-hidden="true"></div>
+            <span>Calibrating — sit naturally for <b id="calibrationSeconds">15</b>s</span>
+          </div>
         </div>
       </section>
 
@@ -107,6 +111,9 @@
             </div>
           </div>
           <div class="posture-badge" id="postureBadge" data-state="">--</div>
+          <ul class="breakdown-list" id="breakdownList" aria-label="Why this score">
+            <li class="breakdown-empty">Score breakdown appears once calibration finishes.</li>
+          </ul>
         </div>
 
         <!-- Attention state -->
@@ -135,7 +142,41 @@
           </select>
         </div>
 
+        <!-- Sensors: HRV-proxy + ambient light -->
+        <div class="card sensors-card" aria-label="Sensor readings">
+          <span class="card-eyebrow">Sensors</span>
+          <div class="sensor-row">
+            <span class="sensor-label">
+              <span class="sensor-quality-dot" id="hrQualityDot"></span>
+              HRV proxy
+            </span>
+            <span class="sensor-value" id="hrValue">--</span>
+          </div>
+          <div class="sensor-row">
+            <span class="sensor-label">Ambient light</span>
+            <span class="sensor-value" id="luxValue">--</span>
+          </div>
+          <div class="sensor-note" id="sensorNote">Rest a finger on the MAX30102 for an HRV reading.</div>
+        </div>
+
+        <!-- Gamification: streak -->
+        <div class="card streak-card" aria-label="Focus streak">
+          <span class="card-eyebrow">Streak</span>
+          <div class="streak-row">
+            <span class="streak-flame" aria-hidden="true">🔥</span>
+            <span class="streak-value" id="streakValue">0</span>
+            <span class="streak-unit">days</span>
+          </div>
+          <div class="streak-badge" id="streakBadge">Building Momentum in 3 days</div>
+        </div>
+
       </aside>
+    </div>
+
+    <!-- ── Proactive focus-decay nudge (separate from the reactive alert toasts) ── -->
+    <div class="nudge-banner" id="nudgeBanner" style="display:none">
+      <span class="nudge-icon" aria-hidden="true">◔</span>
+      <span id="nudgeMessage"></span>
     </div>
 
     <!-- ── Metric strip ────────────────────────────────────────────────────── -->
@@ -192,6 +233,47 @@
       </div>
       <div class="chart-box chart-box--wide">
         <canvas id="timeSplitChart" aria-label="Focused versus distracted time bar chart"></canvas>
+      </div>
+    </div>
+
+    <!-- ── Doughnuts: state distribution ──────────────────────────────────── -->
+    <div class="charts-row">
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Posture State Split</span>
+        </div>
+        <div class="chart-box chart-box--donut">
+          <canvas id="postureDonutChart" aria-label="Posture state distribution donut chart"></canvas>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Focused vs Distracted</span>
+        </div>
+        <div class="chart-box chart-box--donut">
+          <canvas id="focusDonutChart" aria-label="Focused versus distracted time donut chart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Radar: session snapshot + sensor correlation ───────────────────── -->
+    <div class="charts-row">
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Session Snapshot</span>
+        </div>
+        <div class="chart-box">
+          <canvas id="radarChart" aria-label="Session summary radar chart"></canvas>
+        </div>
+      </div>
+      <div class="card chart-card">
+        <div class="card-header">
+          <span class="card-eyebrow">Sensors Over Time</span>
+          <span class="legend-dot amber"></span>
+        </div>
+        <div class="chart-box">
+          <canvas id="sensorChart" aria-label="HRV and ambient light over time"></canvas>
+        </div>
       </div>
     </div>
 

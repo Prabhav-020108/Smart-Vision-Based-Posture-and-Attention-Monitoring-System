@@ -5,9 +5,17 @@ Architecture:
   - It writes the latest JPEG frame and metrics dict into module-level globals.
   - /video_feed reads those globals and streams MJPEG to the browser.
   - /api/live/metrics returns the latest metrics as JSON (no frame data).
+  - A second daemon thread (serial reader, started in on_startup) reads
+    sensor lines from the ESP32 independently of the camera loop.
   - All other endpoints are CRUD against the SQLite/SQLAlchemy database.
 
-This means you need only one process:
+Reliability: the original worker loop broke out permanently on the first
+frame-read failure. It now tolerates a run of consecutive failures with a
+brief backoff, and attempts a full camera reconnect before giving up — see
+CAMERA_FAILURE_BACKOFF_THRESHOLD / CAMERA_MAX_RECONNECT_ATTEMPTS in
+src/utils/config.py.
+
+This means you still need only one process:
     uvicorn src.api.routes:app --reload
 """
 
@@ -32,7 +40,12 @@ from sqlalchemy import desc, select
 from src.db import crud, models
 from src.db.database import SessionLocal, init_db
 from src.services.session_service import SessionService
-from src.utils.config import CAMERA_INDEX
+from src.utils.config import (
+    CAMERA_FAILURE_BACKOFF_THRESHOLD,
+    CAMERA_INDEX,
+    CAMERA_MAX_RECONNECT_ATTEMPTS,
+    SENSOR_SAVE_INTERVAL_SECONDS,
+)
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -41,7 +54,7 @@ STATIC_DIR = DASHBOARD_DIR / "static"
 TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 
 # ─── FastAPI app ──────────────────────────────────────────────────────────────
-app = FastAPI(title="PostureGuard API", version="2.0.0")
+app = FastAPI(title="PostureGuard API", version="3.0.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -54,7 +67,7 @@ _camera_ok: bool = False
 _esp32_connected: bool = False
 _session_start_epoch: float | None = None   # time.time() when session started
 
-_SAVE_INTERVAL_S = 2.0   # DB write interval
+_SAVE_INTERVAL_S = 2.0   # telemetry DB write interval
 
 
 def _get_esp32_status() -> bool:
@@ -64,6 +77,54 @@ def _get_esp32_status() -> bool:
         return bool(SERIAL_CONNECTED)
     except Exception:
         return False
+
+
+def _get_telegram_status() -> bool:
+    """Read Telegram configuration status without crashing if import fails."""
+    try:
+        from src.services.telegram_notifier import TELEGRAM_ENABLED  # noqa: PLC0415
+        return bool(TELEGRAM_ENABLED)
+    except Exception:
+        return False
+
+
+def _persist_sensor_readings(session_svc: SessionService, session_id: str) -> None:
+    """Write the latest HR/LUX readings (if any) to the SensorReading table."""
+
+    from src import sensor_manager  # noqa: PLC0415
+
+    latest = sensor_manager.get_latest()
+
+    hr = latest.get("hr")
+    if hr:
+        try:
+            session_svc.save_sensor_reading(
+                session_id,
+                sensor_type="hrv_proxy",
+                value=hr["bpm"],
+                unit="bpm",
+                metadata={
+                    "ibi_ms": hr["ibi_ms"],
+                    "quality": hr["quality"],
+                    "plausible": hr["plausible"],
+                    "reliable": latest.get("hr_reliable", False),
+                },
+            )
+        except Exception as exc:
+            print(f"[worker] Sensor save error (hr): {exc}")
+
+    lux = latest.get("lux")
+    if lux:
+        try:
+            session_svc.save_sensor_reading(
+                session_id,
+                sensor_type="ambient_light",
+                value=lux["brightness_score"],
+                unit="pct",
+                metadata={"raw_adc": lux["raw"]},
+            )
+        except Exception as exc:
+            print(f"[worker] Sensor save error (lux): {exc}")
 
 
 # ─── Background vision worker ─────────────────────────────────────────────────
@@ -76,33 +137,64 @@ def _vision_worker() -> None:
     # Lazy-import heavy libraries so startup isn't blocked
     from src.services.vision_service import VisionService   # noqa: PLC0415
     from src.services.session_service import SessionService  # noqa: PLC0415
-    from src.serial_manager import send_alert                 # noqa: PLC0415
+    from src.services.alert_service import AlertService       # noqa: PLC0415
+    from src.services.telegram_notifier import send_telegram_message_async  # noqa: PLC0415
+    from src import sensor_manager                             # noqa: PLC0415
 
     vision: VisionService | None = None
     session_svc = SessionService()
+    alert_svc = AlertService(notifier=send_telegram_message_async)
+
+    consecutive_failures = 0
+    reconnect_attempts = 0
 
     try:
-        vision = VisionService(camera_index=CAMERA_INDEX)
+        vision = VisionService(camera_index=CAMERA_INDEX, alert_service=alert_svc)
 
         # ── Sanity-check: can we actually read a frame? ───────────────────────
         probe = vision.process_next_frame(draw_overlay=False)
         if probe is None:
-            print("[worker] Camera index %d unavailable. Stopping." % CAMERA_INDEX)
+            print(f"[worker] Camera index {CAMERA_INDEX} unavailable. Stopping.")
             _camera_ok = False
             return
 
         _camera_ok = True
+        sensor_manager.reset()
         session = session_svc.start_session()
         _active_session_id = session.session_id
         _session_start_epoch = time.time()
         print(f"[worker] Session started: {_active_session_id}")
 
         last_saved_at = 0.0
+        last_sensor_saved_at = 0.0
 
         while _worker_running:
             raw = vision.process_next_frame(draw_overlay=True)
+
+            # ── Frame read failed: back off, and reconnect after a run of
+            #    consecutive failures instead of giving up on the first one.
             if raw is None:
-                break
+                consecutive_failures += 1
+
+                if consecutive_failures >= CAMERA_FAILURE_BACKOFF_THRESHOLD:
+                    reconnect_attempts += 1
+                    print(
+                        f"[worker] {consecutive_failures} consecutive frame "
+                        f"read failures — reconnecting camera "
+                        f"(attempt {reconnect_attempts}/{CAMERA_MAX_RECONNECT_ATTEMPTS})."
+                    )
+                    if reconnect_attempts > CAMERA_MAX_RECONNECT_ATTEMPTS:
+                        print("[worker] Camera reconnect attempts exhausted. Stopping.")
+                        break
+                    vision.reopen_capture()
+                    consecutive_failures = 0
+                    time.sleep(0.5)  # give the driver a moment after reopening
+                else:
+                    time.sleep(0.05)  # brief backoff before the next read attempt
+                continue
+
+            consecutive_failures = 0
+            reconnect_attempts = 0
 
             # ── Encode frame → JPEG ─────────────────────────────────────────
             frame_arr = raw.pop("frame", None)
@@ -118,8 +210,9 @@ def _vision_worker() -> None:
             raw["session_id"] = _active_session_id
             _latest_metrics = dict(raw)
 
-            # ── Periodic DB persistence ─────────────────────────────────────
             now = time.monotonic()
+
+            # ── Periodic telemetry persistence ──────────────────────────────
             if now - last_saved_at >= _SAVE_INTERVAL_S and _active_session_id:
                 try:
                     session_svc.save_telemetry_sample(_active_session_id, dict(raw))
@@ -127,13 +220,15 @@ def _vision_worker() -> None:
                     print(f"[worker] Telemetry save error: {exc}")
                 last_saved_at = now
 
-            # ── Serial alert ────────────────────────────────────────────────
+            # ── Periodic sensor persistence ─────────────────────────────────
+            if now - last_sensor_saved_at >= SENSOR_SAVE_INTERVAL_SECONDS and _active_session_id:
+                _persist_sensor_readings(session_svc, _active_session_id)
+                last_sensor_saved_at = now
+
+            # ── Alert (cooldown-gated ESP32 buzz + Telegram push for severe ones) ─
             alert = raw.get("alert_message", "")
             if alert:
-                try:
-                    send_alert(alert)
-                except Exception:
-                    pass
+                alert_svc.emit(alert)
 
     except Exception as exc:
         print(f"[worker] Fatal error: {exc}")
@@ -168,6 +263,10 @@ def on_startup() -> None:
     global _worker_running, _esp32_connected
     init_db()
     _esp32_connected = _get_esp32_status()
+
+    from src.serial_manager import start_serial_reader  # noqa: PLC0415
+    start_serial_reader()
+
     _worker_running = True
     t = threading.Thread(
         target=_vision_worker, daemon=True, name="postureguard-vision"
@@ -223,7 +322,7 @@ def dashboard(request: Request) -> Response:
 
 @app.get("/api/status")
 def get_status() -> dict[str, Any]:
-    """Return system-level status: camera, ESP32, active session."""
+    """Return system-level status: camera, ESP32, Telegram, active session."""
     session_elapsed: float | None = None
     if _session_start_epoch is not None:
         session_elapsed = time.time() - _session_start_epoch
@@ -232,6 +331,7 @@ def get_status() -> dict[str, Any]:
         "camera_ok": _camera_ok,
         "worker_running": _worker_running,
         "esp32_connected": _esp32_connected or _get_esp32_status(),
+        "telegram_enabled": _get_telegram_status(),
         "active_session_id": _active_session_id,
         "session_elapsed_seconds": session_elapsed,
     }
@@ -248,7 +348,7 @@ def get_live_metrics() -> dict[str, Any]:
             "camera_ok": _camera_ok,
             "worker_running": _worker_running,
         }
-    return {"available": True, **_latest_metrics}
+    return jsonable_encoder({"available": True, **_latest_metrics})
 
 
 @app.get("/api/live/history")
@@ -261,6 +361,33 @@ def get_live_history(
     svc = SessionService()
     samples = svc.get_recent_samples(_active_session_id, limit=limit)
     return jsonable_encoder({"samples": samples, "session_id": _active_session_id})
+
+
+# ─── Sensors ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/sensors/latest")
+def get_sensors_latest() -> dict[str, Any]:
+    """Return the latest HRV-proxy and ambient-light readings."""
+    from src import sensor_manager  # noqa: PLC0415
+    return jsonable_encoder(sensor_manager.get_latest())
+
+
+@app.get("/api/sensors/history")
+def get_sensors_history(
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> dict[str, Any]:
+    """Return recent HRV-proxy and ambient-light history for correlation charts."""
+    from src import sensor_manager  # noqa: PLC0415
+    return jsonable_encoder(sensor_manager.get_history(limit=limit))
+
+
+# ─── Gamification ────────────────────────────────────────────────────────────
+
+@app.get("/api/gamification/summary")
+def get_gamification_summary() -> dict[str, Any]:
+    """Return the current streak, best streak, and badge progress."""
+    from src.services.gamification_service import get_streak_summary  # noqa: PLC0415
+    return jsonable_encoder(get_streak_summary())
 
 
 # ─── Sessions ────────────────────────────────────────────────────────────────
@@ -319,6 +446,21 @@ def get_session_samples(
         return jsonable_encoder(
             {"samples": [SessionService._sample_to_dict(s) for s in samples]}
         )
+
+
+@app.get("/api/sessions/{session_id}/sensors")
+def get_session_sensors(
+    session_id: str,
+    sensor_type: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 500,
+) -> dict[str, Any]:
+    with SessionLocal() as db:
+        if crud.get_session(db, session_id) is None:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    readings = SessionService().get_recent_sensor_readings(
+        session_id, sensor_type=sensor_type, limit=limit
+    )
+    return jsonable_encoder({"readings": readings})
 
 
 @app.get("/api/sessions/{session_id}/summary")

@@ -64,17 +64,17 @@ _latest_metrics: dict[str, Any] | None = None  # latest metrics without frame
 _active_session_id: str | None = None
 _worker_running: bool = False
 _camera_ok: bool = False
-_esp32_connected: bool = False
 _session_start_epoch: float | None = None   # time.time() when session started
 
 _SAVE_INTERVAL_S = 2.0   # telemetry DB write interval
 
 
 def _get_esp32_status() -> bool:
-    """Read serial connection status without crashing if import fails."""
+    """Live-check whether the ESP32 serial port is still connected and the
+    reader thread is healthy, rather than relying on a one-shot startup flag."""
     try:
-        from src.serial_manager import SERIAL_CONNECTED  # noqa: PLC0415
-        return bool(SERIAL_CONNECTED)
+        from src.serial_manager import is_connected  # noqa: PLC0415
+        return is_connected()
     except Exception:
         return False
 
@@ -260,9 +260,8 @@ def _vision_worker() -> None:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    global _worker_running, _esp32_connected
+    global _worker_running
     init_db()
-    _esp32_connected = _get_esp32_status()
 
     from src.serial_manager import start_serial_reader  # noqa: PLC0415
     start_serial_reader()
@@ -330,7 +329,7 @@ def get_status() -> dict[str, Any]:
     return {
         "camera_ok": _camera_ok,
         "worker_running": _worker_running,
-        "esp32_connected": _esp32_connected or _get_esp32_status(),
+        "esp32_connected": _get_esp32_status(),
         "telegram_enabled": _get_telegram_status(),
         "active_session_id": _active_session_id,
         "session_elapsed_seconds": session_elapsed,

@@ -29,6 +29,7 @@ import mediapipe as mp
 from src.attention_tracker import detect_attention
 from src.calibration import CalibrationSession
 from src.decay_predictor import FocusDecayPredictor
+from src.focus_composite import CompositeFocusEngine
 from src.pose_geometry import extract_ratios
 from src.posture_detector import calculate_posture
 from src.score_manager import calculate_focus_percentage
@@ -61,6 +62,7 @@ class VisionMetrics:
     calibrating: bool
     calibration_seconds_remaining: float
     sensors: Dict[str, Any] = field(default_factory=dict)
+    focus_composite: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +82,7 @@ class VisionMetrics:
             "calibrating": self.calibrating,
             "calibration_seconds_remaining": self.calibration_seconds_remaining,
             "sensors": self.sensors,
+            "focus_composite": self.focus_composite,
         }
 
 
@@ -106,6 +109,7 @@ class VisionService:
         self.calibration = CalibrationSession()
         self.calibration.start()
         self.decay_predictor = FocusDecayPredictor()
+        self.focus_engine = CompositeFocusEngine()
 
         self.focused_time = 0.0
         self.distracted_time = 0.0
@@ -182,6 +186,14 @@ class VisionService:
         proactive_nudge = None
         landmarks_detected = results.pose_landmarks is not None
 
+        focus_percentage = calculate_focus_percentage(self.focused_time, self.distracted_time)
+        sensors = get_latest_sensor_readings()
+        # Composite engine blends HRV + light on top of the camera anchor.
+        # Note: focus_composite is a NEW read-only display metric and is
+        # deliberately NOT fed into alert thresholds, timers, decay_predictor,
+        # or gamification — those all keep using focus_percentage unchanged.
+        focus_composite = self.focus_engine.compute(focus_percentage, sensors)
+
         if landmarks_detected:
             landmarks = results.pose_landmarks.landmark
             nose = landmarks[0]
@@ -241,11 +253,11 @@ class VisionService:
                     attention_state,
                     attention_color,
                     alert_message,
+                    sensors,
+                    focus_composite,
                 )
         elif draw_overlay and self.calibration.is_calibrating:
             self._draw_calibration_banner(frame)
-
-        focus_percentage = calculate_focus_percentage(self.focused_time, self.distracted_time)
 
         return VisionMetrics(
             frame=frame,
@@ -263,7 +275,8 @@ class VisionService:
             landmarks_detected=landmarks_detected,
             calibrating=self.calibration.is_calibrating,
             calibration_seconds_remaining=self.calibration.seconds_remaining,
-            sensors=get_latest_sensor_readings(),
+            sensors=sensors,
+            focus_composite=focus_composite,
         ).to_dict()
 
     def release(self):
@@ -296,6 +309,8 @@ class VisionService:
         attention_state,
         attention_color,
         alert_message,
+        sensors: dict | None = None,
+        focus_composite: dict | None = None,
     ):
         self.mp_draw.draw_landmarks(
             frame,
@@ -370,11 +385,79 @@ class VisionService:
             (255, 255, 255),
             2,
         )
+
+        # ── NEW: HRV sensor line ─────────────────────────────────────────────
+        if sensors:
+            hr = sensors.get("hr")
+            if hr and sensors.get("hr_reliable"):
+                hrv_text = f"HRV: {int(round(hr['bpm']))} bpm"
+                hrv_color = (0, 255, 128)     # green — reliable reading
+            elif hr:
+                hrv_text = f"HRV: {int(round(hr['bpm']))} bpm (low quality)"
+                hrv_color = (0, 180, 255)     # amber — reading present but unreliable
+            else:
+                hrv_text = "HRV: --"
+                hrv_color = (120, 120, 120)   # dim grey — no reading
+        else:
+            hrv_text = "HRV: --"
+            hrv_color = (120, 120, 120)
+
+        cv2.putText(
+            frame,
+            hrv_text,
+            (20, 380),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            hrv_color,
+            2,
+        )
+
+        # ── NEW: Ambient light line ──────────────────────────────────────────
+        if sensors:
+            lux = sensors.get("lux")
+            light_text = (
+                f"Light: {int(round(lux['brightness_score']))}%" if lux else "Light: --"
+            )
+        else:
+            light_text = "Light: --"
+
+        cv2.putText(
+            frame,
+            light_text,
+            (20, 420),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+        )
+
+        # ── NEW: Composite (blended) focus line ──────────────────────────────
+        if focus_composite:
+            composite_pct = focus_composite.get("composite_focus_percentage")
+            blended_text = (
+                f"Focus (blended): {int(round(composite_pct))}%"
+                if composite_pct is not None
+                else "Focus (blended): --"
+            )
+        else:
+            blended_text = "Focus (blended): --"
+
+        cv2.putText(
+            frame,
+            blended_text,
+            (20, 460),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 220, 255),   # cyan — distinct from the white camera-only line
+            2,
+        )
+
+        # ── Existing: Alert message (shifted down to avoid overlap) ──────────
         if alert_message:
             cv2.putText(
                 frame,
                 alert_message,
-                (20, 420),
+                (20, 510),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 1,
                 (0, 0, 255),

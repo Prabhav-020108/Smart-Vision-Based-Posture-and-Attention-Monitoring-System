@@ -45,6 +45,27 @@ except Exception as exc:
 _last_message: str = ""
 
 
+def is_connected() -> bool:
+    """Dynamically check whether the ESP32 serial connection is alive.
+
+    Returns True only when:
+      1. The initial connection succeeded (SERIAL_CONNECTED is True).
+      2. The underlying serial port object exists and is open.
+      3. The reader thread is still running (hasn't crashed or exited).
+    """
+    if not SERIAL_CONNECTED or esp32 is None:
+        return False
+    try:
+        if not esp32.is_open:
+            return False
+    except Exception:
+        return False
+    # Reader thread must be alive for data to flow
+    if _reader_thread is not None and not _reader_thread.is_alive():
+        return False
+    return True
+
+
 def send_alert(message: str) -> bool:
     """Send a warning string to the ESP32. Returns True if sent, False otherwise."""
 
@@ -91,24 +112,30 @@ def start_serial_reader() -> bool:
     from src.sensor_manager import handle_line  # local import avoids a cycle
 
     def _run() -> None:
-        global _reader_running
+        global _reader_running, SERIAL_CONNECTED
         _reader_running = True
         print("[serial] Sensor reader thread started.")
         while SERIAL_CONNECTED:
             try:
                 raw = esp32.readline()
             except Exception as exc:
-                print(f"[serial] Reader stopped: {exc}")
+                print(f"[serial] Reader error — marking ESP32 disconnected: {exc}")
+                SERIAL_CONNECTED = False
                 break
             if not raw:
                 continue  # readline() timeout with nothing received — normal
             try:
-                line = raw.decode(errors="replace")
+                line = raw.decode(errors="replace").strip()
             except Exception:
                 continue
+            if not line:
+                continue
+            # Debug: log every received line so we can trace data flow
+            print(f"[serial] RX: {line}")
             handle_line(line)
         _reader_running = False
-        print("[serial] Sensor reader thread stopped.")
+        SERIAL_CONNECTED = False
+        print("[serial] Sensor reader thread stopped — ESP32 marked disconnected.")
 
     _reader_thread = threading.Thread(
         target=_run, daemon=True, name="postureguard-serial-reader"

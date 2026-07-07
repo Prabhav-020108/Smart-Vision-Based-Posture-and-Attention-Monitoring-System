@@ -52,6 +52,8 @@ const dom = {
   streakBadge:        $('streakBadge'),
   nudgeBanner:        $('nudgeBanner'),
   nudgeMessage:       $('nudgeMessage'),
+  formulaList:        $('formulaList'),
+  formulaBaseline:    $('formulaBaseline'),
 };
 
 /* ── App state ───────────────────────────────────────────────────────────── */
@@ -150,7 +152,10 @@ function applyLiveMetrics(m) {
   dom.attentionValue.textContent = as || '--';
   dom.attentionValue.style.color = as === 'FOCUSED' ? 'var(--green)' : as === 'DISTRACTED' ? 'var(--red)' : '';
 
-  const fp = m.focus_percentage ?? 0;
+  let fp = m.focus_percentage ?? 0;
+  if (m.focus_composite && m.focus_composite.composite_focus_percentage != null) {
+    fp = m.focus_composite.composite_focus_percentage;
+  }
   dom.focusPct.textContent       = fmtPct(fp);
   dom.focusFill.style.width      = `${Math.min(100, Math.max(0, fp))}%`;
   dom.focusPct.style.color       = fp >= 75 ? 'var(--green)' : fp >= 50 ? 'var(--amber)' : 'var(--red)';
@@ -160,6 +165,7 @@ function applyLiveMetrics(m) {
   dom.contDistr.textContent      = fmtSecs(m.continuous_distraction_time);
 
   if (m.sensors) applySensorReadings(m.sensors);
+  if (m.focus_composite) applyFocusFormula(m.focus_composite);
   applyProactiveNudge(m.proactive_nudge);
 
   // Alert count from latest metrics alert_message counts are from history
@@ -199,25 +205,73 @@ function updateBreakdownList(breakdown) {
   }).join('');
 }
 
+/* ── Focus Formula breakdown ────────────────────────────────────────────── */
+function applyFocusFormula(fc) {
+  if (!fc || !fc.components) {
+    dom.formulaList.innerHTML = '<li class="breakdown-empty">Formula data not available yet</li>';
+    return;
+  }
+
+  const c = fc.components;
+  let html = `<li class="breakdown-item neutral"><span>Camera anchor</span><span>${c.camera.toFixed(1)}%</span></li>`;
+
+  if (c.hrv != null) {
+    html += `<li class="breakdown-item neutral"><span>HRV stability</span><span>${c.hrv.toFixed(1)}</span></li>`;
+  }
+  if (c.env != null) {
+    html += `<li class="breakdown-item neutral"><span>Environment</span><span>${c.env.toFixed(1)}</span></li>`;
+  }
+
+  const mod = fc.modifier_applied || 0;
+  const modSign = mod > 0 ? '+' : (mod < 0 ? '-' : '');
+  const modCls = mod > 0 ? 'neutral' : (mod < 0 ? 'penalty' : 'neutral');
+  const modColor = mod > 0 ? 'var(--green)' : (mod < 0 ? 'var(--amber)' : 'var(--text-mid)');
+  
+  html += `<li class="breakdown-item ${modCls}" style="margin-top: 0.5rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 0.5rem;">
+    <span>Modifier applied</span>
+    <span style="color: ${modColor}">${modSign}${Math.abs(mod).toFixed(1)}</span>
+  </li>`;
+
+  dom.formulaList.innerHTML = html;
+  
+  if (fc.hr_baseline_bpm != null) {
+    dom.formulaBaseline.textContent = `${fc.hr_baseline_bpm.toFixed(0)} bpm`;
+  } else {
+    dom.formulaBaseline.textContent = '-- (still establishing)';
+  }
+}
+
 /* ── Sensor readings (HRV proxy + ambient light) ─────────────────────────── */
 function applySensorReadings(sensors) {
+  console.debug("[dashboard] Live sensors:", sensors);
+
   const hr = sensors.hr;
   if (hr && sensors.hr_reliable) {
     dom.hrValue.textContent = `${Math.round(hr.bpm)} bpm`;
+    dom.hrValue.style.color = 'var(--text-hi)';
     dom.hrQualityDot.className = 'sensor-quality-dot good';
     dom.sensorNote.textContent = 'Reading looks stable.';
   } else if (hr) {
     dom.hrValue.textContent = `${Math.round(hr.bpm)} bpm`;
+    dom.hrValue.style.color = 'var(--text-mid)';
     dom.hrQualityDot.className = 'sensor-quality-dot weak';
     dom.sensorNote.textContent = 'Signal quality is low right now — hold still for a cleaner reading.';
   } else {
     dom.hrValue.textContent = '--';
+    dom.hrValue.style.color = 'var(--text-low)';
     dom.hrQualityDot.className = 'sensor-quality-dot none';
     dom.sensorNote.textContent = 'Rest a finger on the MAX30102 for an HRV reading.';
   }
 
   const lux = sensors.lux;
-  dom.luxValue.textContent = lux ? `${lux.brightness_score.toFixed(0)}%` : '--';
+  if (lux) {
+    const luxScore = lux.brightness_score;
+    dom.luxValue.textContent = `${luxScore.toFixed(0)}%`;
+    dom.luxValue.style.color = luxScore > 50 ? 'var(--amber)' : (luxScore > 20 ? 'var(--purple)' : 'var(--text-low)');
+  } else {
+    dom.luxValue.textContent = '--';
+    dom.luxValue.style.color = 'var(--text-low)';
+  }
 }
 
 /* ── Proactive focus-decay nudge (distinct from reactive alert toasts) ──── */

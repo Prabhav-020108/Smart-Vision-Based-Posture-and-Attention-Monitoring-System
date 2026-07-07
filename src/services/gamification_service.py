@@ -60,6 +60,11 @@ def get_streak_summary() -> dict[str, Any]:
     current_streak = _current_streak(good_days)
     best_streak = _longest_run(good_days)
 
+    # --- HACK: Forced 2-day streak for testing as requested ---
+    current_streak = 2
+    best_streak = max(best_streak, 2)
+    # ----------------------------------------------------------
+
     earned_badge = None
     for threshold, name, description in BADGE_THRESHOLDS:
         if current_streak >= threshold and earned_badge is None:

@@ -153,10 +153,32 @@
             <span class="sensor-value" id="hrValue">--</span>
           </div>
           <div class="sensor-row">
-            <span class="sensor-label">Ambient light</span>
+            <span class="sensor-label">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+                <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                <circle cx="8" cy="8" r="2" fill="currentColor"/>
+                <line x1="8" y1="1" x2="8" y2="3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <line x1="8" y1="13" x2="8" y2="15" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <line x1="1" y1="8" x2="3" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+                <line x1="13" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              </svg>
+              Ambient light
+            </span>
             <span class="sensor-value" id="luxValue">--</span>
           </div>
           <div class="sensor-note" id="sensorNote">Rest a finger on the MAX30102 for an HRV reading.</div>
+        </div>
+
+        <!-- Focus Formula -->
+        <div class="card sensors-card" aria-label="Focus Formula">
+          <span class="card-eyebrow">Focus Formula</span>
+          <div class="sensor-note" style="margin-top:0;">Camera is the primary signal. HRV and ambient light can only nudge the score up or down by a few points — more when the camera reading is ambiguous, less when it's already confident. With no sensors connected, this is identical to the camera-only score.</div>
+          <ul class="breakdown-list" id="formulaList" aria-label="Score breakdown">
+            <li class="breakdown-empty">Formula data not available yet</li>
+          </ul>
+          <div class="sensor-note" style="font-size: 0.65rem; background: none; border-left: none; padding-left: 0; opacity: 0.7;">
+            Max HRV swing: &plusmn;6 &middot; Max light swing: &plusmn;4 &middot; HR baseline: <span id="formulaBaseline">-- (still establishing)</span>
+          </div>
         </div>
 
         <!-- Gamification: streak -->
